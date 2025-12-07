@@ -1,0 +1,154 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Background Remover — Single File</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<style>
+  body { font-family: Arial, sans-serif; background: #f3f3f3; padding: 20px; }
+  .card {
+    max-width: 800px; margin: auto; padding: 20px; background: #fff;
+    border-radius: 12px; box-shadow: 0 4px 14px rgba(0,0,0,0.1);
+  }
+  canvas { max-width: 100%; border-radius: 8px; background:#ddd; margin-top: 10px; }
+  button {
+    background: #2563eb; color: #fff; border: none; padding: 10px 16px;
+    border-radius: 8px; cursor: pointer; font-weight: bold;
+  }
+  button:disabled { opacity: .5; cursor:not-allowed; }
+  #download { display:none; margin-top: 12px; padding:10px 16px;
+    background:#10b981; color:#fff; border-radius:8px; text-decoration:none; }
+  #status { font-size:14px; color:#444; margin-left:10px; }
+</style>
+</head>
+
+<body>
+<div class="card">
+
+  <h2>Free Background Remover (No API, No Server)</h2>
+
+  <input type="file" id="fileInput" accept="image/*">
+  <button id="removeBtn" disabled>Remove Background</button>
+  <span id="status">Loading model…</span>
+
+  <h3>Original</h3>
+  <canvas id="original"></canvas>
+
+  <h3>Result</h3>
+  <canvas id="output"></canvas>
+  <a id="download" download="no-background.png">Download PNG</a>
+
+</div>
+
+<!-- TFJS UMD bundle -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.21.0/dist/tf.min.js"></script>
+
+<!-- BodyPix UMD bundle -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-pix@2.0.5/dist/body-pix.min.js"></script>
+
+<script>
+let net = null;
+let imgElement = null;
+
+const fileInput = document.getElementById("fileInput");
+const removeBtn = document.getElementById("removeBtn");
+const statusEl  = document.getElementById("status");
+
+const originalCanvas = document.getElementById("original");
+const outputCanvas   = document.getElementById("output");
+const downloadLink   = document.getElementById("download");
+
+const origCtx = originalCanvas.getContext("2d");
+const outCtx  = outputCanvas.getContext("2d");
+
+// Load BodyPix model (UMD)
+(async () => {
+  statusEl.textContent = "Loading model (10–15 seconds)…";
+
+  net = await bodyPix.load({
+    architecture: "MobileNetV1",
+    outputStride: 16,
+    multiplier: 0.75,
+    quantBytes: 2
+  });
+
+  statusEl.textContent = "Model loaded ✓";
+  removeBtn.disabled = false;
+})();
+    
+// Load selected image
+fileInput.addEventListener("change", (e) => {
+  downloadLink.style.display = "none";
+  
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const img = new Image();
+  img.src = URL.createObjectURL(file);
+
+  img.onload = () => {
+    imgElement = img;
+
+    originalCanvas.width  = img.width;
+    originalCanvas.height = img.height;
+
+    outputCanvas.width  = img.width;
+    outputCanvas.height = img.height;
+
+    origCtx.drawImage(img, 0, 0);
+  };
+});
+
+// Run segmentation
+removeBtn.addEventListener("click", async () => {
+  if (!imgElement) {
+    alert("Please upload an image first.");
+    return;
+  }
+
+  statusEl.textContent = "Processing…";
+
+  const segmentation = await net.segmentPerson(imgElement, {
+    internalResolution: "medium",
+    segmentationThreshold: 0.7
+  });
+
+  const { width, height, data } = segmentation;
+
+  // Draw original image to temp canvas
+  const temp = document.createElement("canvas");
+  temp.width = width;
+  temp.height = height;
+  const tctx = temp.getContext("2d");
+  tctx.drawImage(imgElement, 0, 0, width, height);
+  const src = tctx.getImageData(0,0,width,height).data;
+
+  const out = tctx.createImageData(width, height);
+  const outData = out.data;
+
+  // Keep only person pixels
+  for (let i = 0, p = 0; i < data.length; i++, p += 4) {
+    if (data[i] === 1) {
+      outData[p]   = src[p];
+      outData[p+1] = src[p+1];
+      outData[p+2] = src[p+2];
+      outData[p+3] = 255;
+    } else {
+      outData[p] = outData[p+1] = outData[p+2] = 0;
+      outData[p+3] = 0;
+    }
+  }
+
+  // Draw transparent result
+  outCtx.putImageData(out, 0, 0);
+
+  // Enable download
+  downloadLink.href = outputCanvas.toDataURL("image/png");
+  downloadLink.style.display = "inline-block";
+
+  statusEl.textContent = "Done ✓";
+});
+</script>
+</body>
+</html>
